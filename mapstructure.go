@@ -32,6 +32,10 @@ import (
 // both.
 type DecodeHookFunc interface{}
 
+// DecodeHookByPassType is a DecodeHookFunc which has complete information about
+// the source and target types and allows control the decoding flow of nested structures
+type DecodeHookBypassType func(reflect.Type, reflect.Type, interface{}) (interface{}, bool, error)
+
 // DecodeHookFuncType is a DecodeHookFunc which has complete information about
 // the source and target types.
 type DecodeHookFuncType func(reflect.Type, reflect.Type, interface{}) (interface{}, error)
@@ -219,6 +223,13 @@ func NewDecoder(config *DecoderConfig) (*Decoder, error) {
 // Decode decodes the given raw interface to the target pointer specified
 // by the configuration.
 func (d *Decoder) Decode(input interface{}) error {
+	for reflect.TypeOf(input).Kind() == reflect.Ptr {
+		v := reflect.ValueOf(input).Elem()
+		if !v.CanInterface() {
+			break
+		}
+		input = v.Interface()
+	}
 	return d.decode("", input, reflect.ValueOf(d.config.Result).Elem())
 }
 
@@ -248,10 +259,11 @@ func (d *Decoder) decode(name string, input interface{}, outVal reflect.Value) e
 		return nil
 	}
 
+	bypass := false
 	if d.config.DecodeHook != nil {
 		// We have a DecodeHook, so let's pre-process the input.
 		var err error
-		input, err = DecodeHookExec(
+		input, bypass, err = DecodeHookExec(
 			d.config.DecodeHook,
 			inputVal.Type(), outVal.Type(), input)
 		if err != nil {
@@ -260,35 +272,40 @@ func (d *Decoder) decode(name string, input interface{}, outVal reflect.Value) e
 	}
 
 	var err error
-	inputKind := getKind(outVal)
-	switch inputKind {
-	case reflect.Bool:
-		err = d.decodeBool(name, input, outVal)
-	case reflect.Interface:
-		err = d.decodeBasic(name, input, outVal)
-	case reflect.String:
-		err = d.decodeString(name, input, outVal)
-	case reflect.Int:
-		err = d.decodeInt(name, input, outVal)
-	case reflect.Uint:
-		err = d.decodeUint(name, input, outVal)
-	case reflect.Float32:
-		err = d.decodeFloat(name, input, outVal)
-	case reflect.Struct:
-		err = d.decodeStruct(name, input, outVal)
-	case reflect.Map:
-		err = d.decodeMap(name, input, outVal)
-	case reflect.Ptr:
-		err = d.decodePtr(name, input, outVal)
-	case reflect.Slice:
-		err = d.decodeSlice(name, input, outVal)
-	case reflect.Array:
-		err = d.decodeArray(name, input, outVal)
-	case reflect.Func:
-		err = d.decodeFunc(name, input, outVal)
-	default:
-		// If we reached this point then we weren't able to decode it
-		return fmt.Errorf("%s: unsupported type: %s", name, inputKind)
+	if !bypass {
+		inputKind := getKind(outVal)
+		switch inputKind {
+		case reflect.Bool:
+			err = d.decodeBool(name, input, outVal)
+		case reflect.Interface:
+			err = d.decodeBasic(name, input, outVal)
+		case reflect.String:
+			err = d.decodeString(name, input, outVal)
+		case reflect.Int:
+			err = d.decodeInt(name, input, outVal)
+		case reflect.Uint:
+			err = d.decodeUint(name, input, outVal)
+		case reflect.Float32:
+			err = d.decodeFloat(name, input, outVal)
+		case reflect.Struct:
+			err = d.decodeStruct(name, input, outVal)
+		case reflect.Map:
+			err = d.decodeMap(name, input, outVal)
+		case reflect.Ptr:
+			err = d.decodePtr(name, input, outVal)
+		case reflect.Slice:
+			err = d.decodeSlice(name, input, outVal)
+		case reflect.Array:
+			err = d.decodeArray(name, input, outVal)
+		case reflect.Func:
+			err = d.decodeFunc(name, input, outVal)
+		default:
+			// If we reached this point then we weren't able to decode it
+			return fmt.Errorf("%s: unsupported type: %s", name, inputKind)
+		}
+	} else {
+		outVal.Set(reflect.ValueOf(input))
+		err = nil
 	}
 
 	// If we reached here, then we successfully decoded SOMETHING, so
